@@ -1,12 +1,12 @@
 /***************************************************************************
 *
-* Copyright (c) 2019, Xinkerr
+* Copyright (c) 2020, Xinkerr
 *
 * This file is part of msgQueque.
 *
 * msgQueque is free software: you can redistribute it and/or modify
 * it under the terms of the GNU Lesser General Public License as published by
-* the Free Software Foundation, either version 3 of the License, or
+* the Free Software Foundation, either version 2 of the License, or
 * (at your option) any later version.
 *
 * msgQueque is distributed in the hope that it will be useful,
@@ -20,9 +20,9 @@
 * LICENSE: LGPL V2.1
 * see: http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
 *
-* Date:    2019/8/5
+* Date:    2020/8/6
 * Author:  鄭訫
-* Version: 1.0
+* Version: 2.0
 * Github:  https://github.com/Xinkerr/msgQueque
 * Mail:    634326056@qq.com
 *
@@ -51,11 +51,9 @@
 #define __MSGQUEQUE_H__
 #include <stdint.h>
 #include <stdbool.h>
-#include "sconfig.h"
+#include "ringbuffer.h"
 
 typedef uint16_t msgbuf_szie_t;
-
-#define MSG_BUF_MAX_SIZE		BLE_MTU_MAX_SIZE//20//定义消息队列中每个消息存储的最大数据量
 
 typedef enum
 {
@@ -65,39 +63,33 @@ typedef enum
 	msgQUEQUE_ERROR
 }queque_state_m;
 
+//列队信息
 typedef struct
 {
 	uint16_t event;						//消息事件（指消息的来源或是标志）
-	uint8_t buf[MSG_BUF_MAX_SIZE];		//数据缓冲
 	msgbuf_szie_t buf_size;				//数据大小
-}queque_data_t;
+}queque_data_info_t;
 
+//消息队列
 typedef struct 
 {
-	queque_data_t*	pdata; 				//消息数据的指针
+	queque_data_info_t*	pdata; 				//消息体成员的指针
 
-	//用于做ringbuffer 
-	uint16_t write_index;				
-	// bool	 write_mirror;				
+	uint16_t write_index;							
 	uint16_t read_index;
-	// bool 	 read_mirror;
 	bool _bMirror;
 	uint16_t queque_size;
+
+	ringbuffer_t ringbuf_handle;
 }msgQueque_t;
 
 
 //消息队列初始化
-int msgQueque_init(msgQueque_t* msg, queque_data_t* pdata, uint16_t size);
+int msgQueque_init(msgQueque_t* msg, queque_data_info_t* queque, uint16_t queque_size, uint8_t* msg_pool, uint16_t pool_size);
 //消息队列的状态
 queque_state_m msgQueque_status(msgQueque_t* msg);
 //加入消息
 int msgQueque_put(msgQueque_t* msg, uint16_t event, uint8_t *pdata, uint16_t size);
 //取出消息
-int msgQueque_get(msgQueque_t* msg, queque_data_t* msgData);
-//读取消息，非取出
-int msgQueque_read(msgQueque_t* msg, queque_data_t* msgData);
-//read指针向下一地址移动
-void msgQueque_next(msgQueque_t* msg);
-//清除消息队列所有数据
-void msgQueque_all_clear(msgQueque_t* msg);
+int msgQueque_get(msgQueque_t* msg, queque_data_info_t* queque_info, uint8_t* msg_content);
 #endif

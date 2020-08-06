@@ -1,12 +1,12 @@
 /***************************************************************************
 *
-* Copyright (c) 2019, Xinkerr
+* Copyright (c) 2020, Xinkerr
 *
 * This file is part of msgQueque.
 *
 * msgQueque is free software: you can redistribute it and/or modify
 * it under the terms of the GNU Lesser General Public License as published by
-* the Free Software Foundation, either version 3 of the License, or
+* the Free Software Foundation, either version 2 of the License, or
 * (at your option) any later version.
 *
 * msgQueque is distributed in the hope that it will be useful,
@@ -20,9 +20,9 @@
 * LICENSE: LGPL V2.1
 * see: http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
 *
-* Date:    2019/8/5
+* Date:    2020/8/6
 * Author:  鄭訫
-* Version: 1.0
+* Version: 2.0
 * Github:  https://github.com/Xinkerr/msgQueque
 * Mail:    634326056@qq.com
 *
@@ -58,23 +58,27 @@
  *
  * @details   对消息队列的结构体初始化，传入存储数据的结构体地址，以及消息队列的大小
  *
- * @param[in] msg:    消息队列结构体
- * @param[in] pdata:  保存消息内容的结构体
- * @param[in] size:   设定消息队列的大小，保存消息内容的结构体数组的大小
+ * @param[in] msg:    		消息队列对象句柄
+ * @param[in] queque:  		队列地址
+ * @param[in] queque_size:  设定消息队列的大小，消息体成员的最大有效个数（数组大小）
+ * @param[in] msg_pool:   	消息缓冲池，存放消息的地方
+ * @param[in] pool_size:   	消息缓冲池大小
  *
  * @return    -1：参数错误；
  *			   0：正常
  */
-int msgQueque_init(msgQueque_t* msg, queque_data_t* pdata, uint16_t size)
+int msgQueque_init(msgQueque_t* msg, queque_data_info_t* queque, uint16_t queque_size, uint8_t* msg_pool, uint16_t pool_size)
 {
-	if(msg == NULL || pdata == NULL || size == 0)
+	if(msg == NULL || queque == NULL || queque_size == 0 || 
+	   msg_pool == NULL || pool_size == 0)
 	{
 		return -1;
 	}
 	memset(msg, 0, sizeof(msgQueque_t));
-	msg->pdata = pdata;
-	msg->queque_size = size;
-	memset(pdata, 0, sizeof(queque_data_t)*size);
+	msg->pdata = queque;
+	msg->queque_size = queque_size;
+	ringbuffer_init(&msg->ringbuf_handle, msg_pool, pool_size);
+	memset(queque, 0, sizeof(queque_data_info_t)*queque_size);
 	return 0;
 }
 
@@ -82,7 +86,7 @@ int msgQueque_init(msgQueque_t* msg, queque_data_t* pdata, uint16_t size)
  *
  * @details   检测消息的队列的状态，用于是否可以写入或读取
  *
- * @param[in] msg:    消息队列结构体
+ * @param[in] msg:    消息队列对象句柄
  *
  * @return    msgQUEQUE_ERROR：消息队列传入错误
  *			  msgQUEQUE_EMPTY：消息队列空
@@ -119,7 +123,7 @@ queque_state_m msgQueque_status(msgQueque_t* msg)
  *
  * @details   将具体的数据内容写入消息队列中
  *
- * @param[in] msg:    消息队列结构体
+ * @param[in] msg:    消息队列对象句柄
  * @param[in] event:  消息事件（指向消息的来源、原因，或是消息的名称，或是消息的标志）
  * @param[in] pdata:  数据
  * @param[in] size:   数据大小
@@ -134,21 +138,28 @@ int msgQueque_put(msgQueque_t* msg, uint16_t event, uint8_t *pdata, msgbuf_szie_
 	//有空间、无异常下加入消息队列数据
 	if(msg_status == msgQUEQUE_NORMAL || msg_status == msgQUEQUE_EMPTY)
 	{
-		msg->pdata[msg->write_index].event = event;
-		memcpy(msg->pdata[msg->write_index].buf, pdata, size);
-		msg->pdata[msg->write_index].buf_size = size;
-		if(msg->write_index == msg->queque_size - 1)
+		if(ringbuffer_put(&msg->ringbuf_handle, pdata, size) == 0)
 		{
-			msg->_bMirror = !msg->_bMirror;
-			msg->write_index = 0;
+			msg->pdata[msg->write_index].event = event;
+			msg->pdata[msg->write_index].buf_size = size;
+			if(msg->write_index == msg->queque_size - 1)
+			{
+				msg->_bMirror = !msg->_bMirror;
+				msg->write_index = 0;
+			}
+			else
+			{
+				msg->write_index ++;
+			}
+			#if 	DEBUG_LOG
+			printf("write_index:%u\n", msg->write_index);
+			#endif
 		}
 		else
 		{
-			msg->write_index ++;
+			return -1;
 		}
-		#if 	DEBUG_LOG
-		printf("write_index:%u\n", msg->write_index);
-		#endif
+		
 	}
 	else
 		return -1;
@@ -160,20 +171,21 @@ int msgQueque_put(msgQueque_t* msg, uint16_t event, uint8_t *pdata, msgbuf_szie_
  *
  * @details   取出消息队列内的数据
  *
- * @param[in] msg:    消息队列结构体
- * @param[in] msgData:  消息数据结构体
+ * @param[in]  msg:          消息队列对象句柄
+ * @param[in]  queque_info:  队列信息
+ * @param[out] msg_content： 消息内容
  *
  * @return    -1：失败
  *			   0：成功
  */
-int msgQueque_get(msgQueque_t* msg, queque_data_t* msgData)
+int msgQueque_get(msgQueque_t* msg, queque_data_info_t* queque_info, uint8_t* msg_content)
 {
 	queque_state_m msg_status;
 	msg_status = msgQueque_status(msg);
 	if(msg_status == msgQUEQUE_NORMAL || msg_status == msgQUEQUE_FULL)
 	{
 		// msgData = &(msg->pdata[msg->read_index]);
-		memcpy(msgData, &msg->pdata[msg->read_index], sizeof(queque_data_t));
+		memcpy(queque_info, &msg->pdata[msg->read_index], sizeof(queque_data_info_t));
 
 		if(msg->read_index == msg->queque_size - 1)
 		{
@@ -187,73 +199,12 @@ int msgQueque_get(msgQueque_t* msg, queque_data_t* msgData)
 		#if 	DEBUG_LOG
 		printf("read_index:%u\n", msg->read_index);
 		#endif
+
+		ringbuffer_get(&msg->ringbuf_handle, msg_content, queque_info->buf_size);
 	}
 	else
 		return -1;
 
 	return 0;
-}
-
-/**@brief     读取消息队列
- *
- * @details   读取消息队列内的数据，并非取出，指针不移动
- *
- * @param[in] msg:    消息队列结构体
- * @param[in] msgData:  消息数据结构体
- *
- * @return    -1：失败
- *			   0：成功
- */
-int msgQueque_read(msgQueque_t* msg, queque_data_t* msgData)
-{
-	queque_state_m msg_status;
-	msg_status = msgQueque_status(msg);
-	if(msg_status == msgQUEQUE_NORMAL || msg_status == msgQUEQUE_FULL)
-	{
-		// msgData = &(msg->pdata[msg->read_index]);
-		memcpy(msgData, &msg->pdata[msg->read_index], sizeof(queque_data_t));
-
-		#if 	DEBUG_LOG
-		printf("read_index:%u\n", msg->read_index);
-		#endif
-	}
-	else
-		return -1;
-
-	return 0;
-}
-
-/**@brief     移动读指针
- *
- * @details   read指针向下一地址移动(配合msgQueque_read()使用)
- *
- * @param[in] msg:    消息队列结构体
- *
- */
-void msgQueque_next(msgQueque_t* msg)
-{
-	if(msg->read_index == msg->queque_size - 1)
-	{
-		msg->_bMirror = !msg->_bMirror;
-		msg->read_index = 0;
-	}
-	else
-	{
-		msg->read_index ++;
-	}
-}
-
-/**@brief     清除消息队列所有数据
- *
- *
- * @param[in] msg:    消息队列结构体
- *
- */
-void msgQueque_all_clear(msgQueque_t* msg)
-{
-	memset(msg->pdata, 0, msg->queque_size);
-	msg->write_index = 0;
-	msg->read_index = 0;
-	msg->_bMirror = 0;
 }
 
